@@ -1,0 +1,14 @@
+services:
+  image:
+    build: .                 # Tells Compose to use your Dockerfile
+    ports:
+      - "8888:8888"          # Maps the Jupyter port
+    volumes:
+      - ./workspace:/workspace        # Maps your current folder to /workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia # Automatically hooks up your NVIDIA GPUs
+              count: all
+              capabilities: [gpu]
