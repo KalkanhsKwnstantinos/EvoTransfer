@@ -5,6 +5,12 @@ services:
       - "8888:8888"          # Maps the Jupyter port
     volumes:
       - ./workspace:/workspace        # Maps your current folder to /workspace
+    environment:
+      - TF_CPP_MIN_LOG_LEVEL=3
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - CUDA_MODULE_LOADING=LAZY
+      - NVTE_FRAMEWORK=tensorflow
+      - ABSL_LOGGING_LOG_TO_STDERR=0
     deploy:
       resources:
         reservations:

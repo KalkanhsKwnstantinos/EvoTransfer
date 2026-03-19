@@ -1,2 +1,2 @@
 matplotlib
-deap
+deap==1.4.3
