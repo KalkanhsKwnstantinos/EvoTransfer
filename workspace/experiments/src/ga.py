@@ -1,120 +1,83 @@
-import random
 from deap import base, creator, tools
 from src.fitness import evaluate_individual
-
-filters_val = [16,32,64,128,256]
-
-def mutate_hp(ind, indpb=0.2):
-    for i in range(len(ind)+len(ind[2])-1):
-        if random.random() < indpb:   # 10% of genes
-            if i == 0:
-                ind[i] += random.choice([-0.0001, 0.0001])
-                if ind[i] < 0.0005 or ind[i] > 0.0015:
-                    ind[i] = random.uniform(0.0005, 0.0015)
-            elif i ==1:
-                ind[i] = return_filter_neighbor(ind[i])
-            else:
-                ind[2][i-2] = return_filter_neighbor(ind[2][i-2])
-    if random.random() < indpb:
-        if len(ind[2]) == 1:
-            ind[2].append(random_filter_size())
-        elif len(ind[2]) == 3:
-            ind[2].pop(random.randint(0,2))
-        else:
-            if random.random() < 0.5:
-                ind[2].pop(random.randint(0,1))
-            else:
-                ind[2].append(random_filter_size())
-    return ind,
-
-def mate_hp(ind1, ind2):
-    
-    if  len(ind1[2]) == len(ind2[2]):
-        for i in range(len(ind1[2])):
-            if random.random() < 0.5:
-                ind1[2][i], ind2[2][i] = ind2[2][i], ind1[2][i]
-    else:
-        if len(ind1[2]) > len(ind2[2]):
-            less_layered_ind = ind2  
-        else: 
-            less_layered_ind = ind1 
-        
-        for i in range(len(less_layered_ind[2])):
-            if random.random() < 0.5:
-                ind1[2][i], ind2[2][i] = ind2[2][i], ind1[2][i]
-
-        if random.random() < 0.5:
-            ind1[2], ind2[2] = ind2[2], ind1[2]
-                    
-    for i in range(len(ind1)-2):
-        if random.random() < 0.5:
-            ind1[i], ind2[i] = ind2[i], ind1[i]
-
-    return ind1, ind2
-
-def return_filter_neighbor(value):
-    index = filters_val.index(value)
-    if index == 0:
-        return filters_val[1]
-    elif index == len(filters_val)-1:
-        return filters_val[-2]
-    else:
-        return filters_val[index + random.choice([-1,1])]
-
-def random_filter_size():
-    return random.choice(filters_val)
-
-def random_filters():
-    return [random_filter_size() for i in range(random.randint(1,3))]
+from src.methods import mate_hp, mutate_hp, make_run_path, save_generation
             
-def setup_ga(dataset):
-
-    creator.create("FitnessMax", base.Fitness, weights=(1.0,))
-    creator.create("Individual", list, fitness=creator.FitnessMax)
+def setup_ga(genespace, dataset):
+    
+    creator.create("FitnessMulti", base.Fitness, weights=(1.0, -1.0, -1.0))
+    creator.create("Individual", list, fitness=creator.FitnessMulti)
 
     toolbox = base.Toolbox()
     
-    # Hyperparameter ranges
-    toolbox.register("lr", random.uniform, 0.0005, 0.0015)
-    toolbox.register("batch", random_filter_size)
-    toolbox.register("filters", random_filters)
-
+    
+    toolbox.register("lr", genespace('lr'))
+    toolbox.register("batch", genespace('batch_size'))
+    toolbox.register("dropout", genespace('dropout_rate'))
+    toolbox.register("kernel", genespace('kernel'))
+    toolbox.register("conv_filters", genespace('conv_filters'))
+    toolbox.register("dense_filters", genespace('dense_filters'))
+    
     toolbox.register("individual", tools.initCycle, creator.Individual,
-                     (toolbox.lr, toolbox.batch, toolbox.filters), n=1)
+                     (toolbox.lr, toolbox.batch, toolbox.dropout, toolbox.kernel, toolbox.conv_filters, toolbox.dense_filters), n=1)
 
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
     toolbox.register("evaluate", evaluate_individual, dataset=dataset)
     toolbox.register("mate", mate_hp)
     toolbox.register("mutate", mutate_hp)
-    toolbox.register("select", tools.selTournament, tournsize=3)
+    toolbox.register("select", tools.selNSGA2)
 
     return toolbox
 
 
-def run_evolution(dataset, pop_size=20, generations=10):
+def run_evolution(genespace, dataset, pop_size=20, generations=10, matepb=0.5, mutpb=0.1, prev_pop = None):
+    
+    toolbox = setup_ga(genespace, dataset)
+    
+    population = prev_pop if prev_pop else toolbox.population(n=pop_size)
 
-    toolbox = setup_ga(dataset)
+    print("Generation 0")
+    
+    fitnesses = list(map(toolbox.evaluate, population))
+    for ind, fit in zip(population, fitnesses):
+        ind.fitness.values = fit
 
-    population = toolbox.population(n=pop_size)
+    # Setup tracking
+    pareto = tools.ParetoFront()
+    pareto.update(population)
+    results_path = make_run_path()
 
+    save_generation(population=population, pareto=pareto, generation=0, genespace=genespace.config, path=results_path)
+    
     for gen in range(generations):
-        print(f"Generation {gen+1 }")
+        print(f"Generation {gen+1}")
 
-        fitnesses = list(map(toolbox.evaluate, population))
-        for ind, fit in zip(population, fitnesses):
-            ind.fitness.values = fit
-
-        offspring = toolbox.select(population, len(population))
-        offspring = list(map(toolbox.clone, offspring))
-
+        offspring = list(map(toolbox.clone, population))
+        
         for c1, c2 in zip(offspring[::2], offspring[1::2]):
-            toolbox.mate(c1, c2)
+            toolbox.mate(c1, c2, matepb=0.1)
+
+            del c1.fitness.values
+            del c2.fitness.values
 
         for ind in offspring:
-            toolbox.mutate(ind)
+            toolbox.mutate(ind=ind,config_iter=iter(genespace.config.values()), mutpb=0.5)
+            
+            del ind.fitness.values
 
-        population[:] = offspring
+        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+        fitnesses = list(map(toolbox.evaluate, invalid_ind))
+        
+        for ind, fit in zip(invalid_ind, fitnesses):
+            ind.fitness.values = fit
+
+        combined_population = population + offspring
+
+        population = toolbox.select(combined_population, pop_size)
+
+        pareto.update(population)
+        
+        save_generation(population=population, pareto=pareto, generation=gen, path=results_path)
 
     return population
 
